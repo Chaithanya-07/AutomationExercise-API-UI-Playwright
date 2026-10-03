@@ -1,0 +1,20 @@
+{
+  "comment": "Example of the customer object produced by utils/testData.js generateTestUser(). No real credentials - the real generator creates a unique email per run (qa_user_<timestamp>@example.com).",
+  "name": "QA User 12345",
+  "email": "qa_user_1760000000000123@example.com",
+  "password": "Test@1234",
+  "title": "Mr",
+  "birth_date": "15",
+  "birth_month": "June",
+  "birth_year": "1995",
+  "firstname": "QA",
+  "lastname": "Tester",
+  "company": "Test Automation Ltd",
+  "address1": "123 Test Street",
+  "address2": "Apartment 4",
+  "country": "India",
+  "zipcode": "500001",
+  "state": "Telangana",
+  "city": "Hyderabad",
+  "mobile_number": "9999999999"
+}

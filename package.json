@@ -1,0 +1,15 @@
+{
+  "name": "automationexercise-api-ui-playwright",
+  "version": "1.0.0",
+  "description": "Full-stack API + UI automation for automationexercise.com using one Playwright framework",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test tests/ui",
+    "test:api": "playwright test tests/api",
+    "test:hybrid": "playwright test tests/hybrid",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}
