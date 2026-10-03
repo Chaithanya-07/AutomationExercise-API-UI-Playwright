@@ -39,4 +39,30 @@ async function searchProducts(request, searchTerm) {
   return { status: response.status(), body: await response.json() };
 }
 
-module.exports = { getAllProducts, getAllBrands, searchProducts };
+// --- Deliberately wrong-method calls, used only by negative tests ---
+// Verified live (2026-10-03): these endpoints answer with body
+// responseCode 405 "This request method is not supported.".
+
+/**
+ * GET /api/searchProduct - WRONG method (search is POST only).
+ */
+async function searchProductsViaGet(request) {
+  const response = await request.get(`${API}/searchProduct`);
+  return { status: response.status(), body: await response.json() };
+}
+
+/**
+ * POST /api/productsList - WRONG method (products list is GET only).
+ */
+async function getAllProductsViaPost(request) {
+  const response = await request.post(`${API}/productsList`, { form: {} });
+  return { status: response.status(), body: await response.json() };
+}
+
+module.exports = {
+  getAllProducts,
+  getAllBrands,
+  searchProducts,
+  searchProductsViaGet,
+  getAllProductsViaPost,
+};

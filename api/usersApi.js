@@ -25,11 +25,13 @@ async function createUser(request, user) {
 
 /**
  * GET /api/getUserDetailByEmail - fetches customer details by email.
+ * Call without an email for the negative "missing parameter" scenario.
  */
 async function getUserDetailByEmail(request, email) {
-  const response = await request.get(`${API}/getUserDetailByEmail`, {
-    params: { email },
-  });
+  const options = {};
+  if (email !== undefined) options.params = { email };
+
+  const response = await request.get(`${API}/getUserDetailByEmail`, options);
   return { status: response.status(), body: await response.json() };
 }
 

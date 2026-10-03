@@ -34,12 +34,15 @@ class ProductsPage extends BasePage {
   }
 
   /**
-   * Type a term into the search box and submit. Results appear in the
-   * same listing area with a "Searched Products" heading.
+   * Type a term into the search box and submit, then WAIT until the
+   * results are actually rendered ("Searched Products" heading) -
+   * without this, results can be read before the listing re-renders
+   * (observed in WebKit).
    */
   async search(term) {
     await this.searchInput.fill(term);
     await this.searchButton.click();
+    await this.searchedProductsHeading.waitFor();
   }
 
   /**

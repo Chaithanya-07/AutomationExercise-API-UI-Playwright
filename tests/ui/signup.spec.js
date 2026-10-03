@@ -35,6 +35,22 @@ test('register a new customer through the UI and delete the account afterwards',
   await signupPage.continueAfterCreation();
   await expect(loginPage.loggedInAs(user.name)).toBeVisible();
 
+  // Step 5 (Phase 2 consistency): the UI just changed backend state by
+  // creating this account - verify through the API that the backend
+  // record matches exactly what the UI submitted.
+  const detailResponse = await usersApi.getUserDetailByEmail(request, user.email);
+  expect(detailResponse.body.responseCode).toBe(200);
+
+  const backendUser = detailResponse.body.user;
+  expect(backendUser.name).toBe(user.name);
+  expect(backendUser.email).toBe(user.email);
+  expect(backendUser.first_name).toBe(user.firstname);
+  expect(backendUser.last_name).toBe(user.lastname);
+  expect(backendUser.address1).toBe(user.address1);
+  expect(backendUser.city).toBe(user.city);
+  expect(backendUser.state).toBe(user.state);
+  expect(backendUser.zipcode).toBe(user.zipcode);
+
   // Cleanup: delete the account so no test user remains.
   // Deletion goes through the API - deterministic in every browser.
   // (In WebKit, the header "Delete Account" link click did not
