@@ -4,6 +4,7 @@ Full-stack test automation for **[automationexercise.com](https://automationexer
 
 > **Phase 1** — foundation (POM, API service layer, fixtures, dynamic data, first hybrid flow). See [Phase 1 report](#actual-results) below.
 > **Phase 2** — API chaining, update coverage, negative/boundary tests, lightweight response validation, stronger hybrid consistency. See [Phase 2](#phase-2--api-chaining-update--negative-coverage--consistency) below.
+> **Phase 3** — authentication, session state (storageState), and an authenticated end-to-end order flow. See [Phase 3](#phase-3--authentication-session-state--end-to-end-order-flow) below.
 
 ## Project Objective
 
@@ -36,22 +37,33 @@ AutomationExercise-API-UI-Playwright/
 │   │   ├── auth.api.spec.js
 │   │   └── users.api.spec.js
 │   └── hybrid/                   # API + UI in one flow
-│       └── customer-api-ui.spec.js
+│       ├── customer-api-ui.spec.js
+│       └── search-consistency.spec.js
+│   └── auth/                     # Phase 3: authentication & session state
+│       ├── storage-state.spec.js   # storageState reuse + logout invalidation
+│       ├── invalid-login.spec.js   # negative authentication (UI layers)
+│       └── order-flow.spec.js      # authenticated end-to-end order flow
 ├── pages/                         # Page Object Model (UI)
 │   ├── BasePage.js                # navigation + logged-in header helpers
 │   ├── HomePage.js
 │   ├── LoginPage.js                # login form + signup entry form
 │   ├── SignupPage.js                # account information form
 │   ├── ProductsPage.js
-│   └── ProductDetailsPage.js
+│   ├── ProductDetailsPage.js        # + quantity, add to cart, modal
+│   ├── CartPage.js                  # Phase 3: cart table + proceed to checkout
+│   ├── CheckoutPage.js              # Phase 3: delivery address + place order
+│   ├── PaymentPage.js               # Phase 3: card details form
+│   └── OrderConfirmationPage.js    # Phase 3: order placed + invoice link
 ├── api/                           # reusable API service layer
 │   ├── authApi.js                  # verifyLogin
 │   ├── productsApi.js               # productsList, brandsList, searchProduct
 │   └── usersApi.js                  # createAccount, getUserDetailByEmail,
 │                                   # updateAccount, deleteAccount
 ├── fixtures/
-│   └── api.fixture.js             # `createdUser`: API-created customer
+│   ├── api.fixture.js             # `createdUser`: API-created customer
 │                                   # (created before test, deleted after)
+│   └── auth.fixture.js            # Phase 3: `authState` — API customer +
+│                                   # one UI login + captured storageState
 ├── utils/
 │   └── testData.js                # unique customer generator
 ├── test-data/
@@ -145,6 +157,7 @@ npx playwright install chromium firefox webkit
 npx playwright test tests/ui       # UI only
 npx playwright test tests/api       # API only
 npx playwright test tests/hybrid    # hybrid only
+npx playwright test tests/auth     # authentication + session state (Phase 3)
 npx playwright test                 # everything, all 3 browsers
 npm run report                      # open the HTML report
 ```
@@ -262,3 +275,133 @@ Same reliable create → test → delete discipline as Phase 1, plus: the lifecy
 - No UI profile-update page exists on Automation Exercise, so UI-driven account-update consistency is not possible (documented above).
 - The wrong-method 405 responses live in the body `responseCode` — the API does not use real HTTP 405s for those (the one real HTTP 405 is POST on `/api/deleteAccount`).
 - Search-consistency compares product **names**, not the full product payloads (the UI listing does not render ids/prices in a comparable way).
+
+---
+
+# Phase 3 — Authentication, Session State, End-to-End Order Flow
+
+## Objective
+
+Demonstrate that the framework handles a realistic **authenticated** workflow, not just isolated API/UI tests: valid and invalid authentication, reusable authenticated browser state (`storageState`), cross-layer validation of the authenticated user, and a full **login → cart → checkout → payment → order confirmation** business flow — without regressing the Phase 1/2 baselines.
+
+## Authentication Architecture
+
+Three layers, each with a single responsibility:
+
+1. **API layer** (`api/usersApi.js`, `api/authApi.js`) — account creation, lookup, `verifyLogin`, deletion. The API has no login-token endpoint, so authenticated state is established through the **UI login** and captured from the browser.
+2. **UI layer** (`pages/LoginPage.js`, `pages/BasePage.js`) — login form interaction, the logged-in header indicator (`"Logged in as <name>"`), logout, and the header links whose visibility encodes auth state (`/logout` visible only when logged in, `/login` only when logged out).
+3. **Fixture/auth-state layer** (`fixtures/auth.fixture.js`) — the `authState` fixture: creates a unique customer via the API, performs **one** UI login, captures the session with `context.storageState()`, and hands `{ user, state }` to the test. The customer is deleted afterwards.
+
+### How the session actually works (verified live)
+
+- The authenticated session is a **server-side `sessionid` cookie** (httpOnly, SameSite=Lax) set by the UI login.
+- A new browser context created from the saved storageState **starts authenticated** — no login UI steps.
+- **Logging out invalidates the state server-side**: after a logout, a second context built from the *same* saved state is a guest again. The state is not a reusable credential that survives logout — this is asserted in a test.
+
+## storageState Strategy — Fast, but Isolated
+
+The `authState` fixture deliberately does **not** share one global authenticated state across tests:
+
+- Every test gets its **own** unique API-created customer and its own captured state → no test-order dependencies, no shared mutable user state.
+- The benefit is still real: within a test, the authenticated context(s) are created directly from the saved state, so tests never repeat login UI steps.
+- The saved state dies with the customer: the fixture deletes the account in cleanup, and the server session dies with it.
+
+## Phase 3 Test Coverage (tests/auth/)
+
+| File | Scenario | Layers |
+|---|---|---|
+| `storage-state.spec.js` | A new context from saved storageState starts authenticated (logged-in indicator + logout control visible; backend record cross-checked via API) | UI + API |
+| `storage-state.spec.js` | Logging out invalidates the saved session state **server-side** (second context from the same state is a guest) | UI |
+| `invalid-login.spec.js` | Empty login fields → blocked by **browser** HTML5 validation, never submitted (inputs `:invalid`, no server error, still on `/login`) | UI |
+| `invalid-login.spec.js` | Malformed email format → blocked by browser `type="email"` validation, never submitted | UI |
+| `invalid-login.spec.js` | Well-formed unknown email + known password → **server** rejects with "Your email or password is incorrect!", no authenticated state | UI |
+| `invalid-login.spec.js` | Known email + wrong password → server rejects, no authenticated state | UI |
+| `order-flow.spec.js` | Authenticated customer orders a product end to end (see below) | UI |
+
+### Invalid authentication — both validation layers covered
+
+Verified live first, then tested: the login form uses **HTML5 validation** (`type="email"`, `required`), so empty fields and malformed email formats are blocked client-side — no server error appears and the form is never submitted (asserted via the CSS `:invalid` pseudo-class plus absence of the server error). Well-formed credentials that don't match an account are submitted and rejected **server-side** with the site's actual red error message. In every negative case the test also asserts the user **did not reach an authenticated state** (no logged-in indicator, signup/login link still visible).
+
+Note: the API layer performs **no** email-format validation at all (Phase 2 finding), so the format boundary only exists in the UI — covered there, honestly.
+
+## End-to-End Order Flow (tests/auth/order-flow.spec.js)
+
+The realistic authenticated business flow, using the reused storageState (no login steps in the test):
+
+```
+authenticated context (storageState)
+→ product details page → Add to cart → modal → View Cart
+→ cart shows the item → Proceed To Checkout
+→ checkout: delivery address block == the API-created customer's account data
+→ Place Order → payment form (test card data)
+→ "Order Placed!" confirmation + dynamically assigned invoice id
+```
+
+The checkout step is the cross-layer proof that the session belongs to *our* customer: `#address_delivery` renders the account's title, first/last name, address, city and zipcode exactly as generated by `utils/testData.js` and registered through the API.
+
+## Cleanup
+
+- `authState` fixture: deletes its API-created customer after every test and logs an error loudly if deletion fails.
+- Test isolation: each test owns its customer and its state; nothing is shared between tests.
+- Known limitation: **orders cannot be deleted** — the site has no orders API. Placing the order empties the cart, and the account deletion removes the customer, but the order record remains on the practice site (documented, not hidden).
+
+## Phase 3 Actual Results (2026-10-03, Playwright 1.63.0, Node v24.13.0)
+
+| Suite | Scenarios | Runs (× 3 browsers) | Passed | Failed |
+|---|---|---|---|---|
+| UI (`tests/ui`) | 7 | 21 | 21 | 0 |
+| API (`tests/api`) | 20 | 60 | 60 | 0 |
+| Hybrid (`tests/hybrid`) | 2 | 6 | 6 | 0 |
+| Auth (`tests/auth`) | 7 | 21 | 21 | 0 |
+| **Total** | **36** | **108** | **108** | **0** |
+
+- Browsers: Chromium, Firefox, WebKit — all passing (including the order flow and the WebKit modal/cart navigation)
+- Full-suite regression run after Phase 3: **108 passed, 0 failed, 0 flaky** (~3.6 minutes) — all Phase 1 and Phase 2 tests unchanged and still green
+
+## Phase 3 Limitations
+
+- **No orders API exists**, so an order cannot be verified or deleted through the API. The invoice id is asserted as dynamically assigned (`/download_invoice/<id>`), and the checkout's delivery address block is the cross-layer validation point instead.
+- The authenticated state must be captured via UI login (no API login-token endpoint); the storageState is therefore per-customer, not a pre-seeded reusable login.
+- Login format validation is HTML5 client-side only — the API accepts malformed emails (Phase 2 finding); the negative tests cover the UI boundary where it actually exists.
+
+## Interview Talking Points
+
+### Q1 — How do you handle authentication in Playwright?
+
+Two ways, used deliberately: for tests that exercise the login form itself, I log in through the UI (`LoginPage` page object). For tests that need an authenticated *user*, I establish the session once (UI login in the `authState` fixture), capture it with `context.storageState()`, and build contexts from that state — so auth setup is one step, not a repeated UI flow.
+
+### Q2 — Why would you use `storageState`?
+
+To avoid re-running the login UI steps before every test. On this site each UI login costs several seconds across three browsers; with storageState the login happens once per test in the fixture and the test contexts start already authenticated. It also lets me assert session behavior itself (reuse, server-side invalidation on logout).
+
+### Q3 — What is the difference between logging in through the UI and creating authenticated state?
+
+UI login exercises the application's real authentication form — that's what the login tests verify. Creating authenticated state is *setup*: it produces a session (cookies) that tests can consume without caring how it was made. Conflating them wastes time — tests for "checkout works" shouldn't fail because a login selector changed, and login tests shouldn't be repeated implicitly everywhere.
+
+### Q4 — How do you prevent authentication state from leaking between tests?
+
+Every test gets its own unique API-created customer and its own captured storageState from the `authState` fixture — nothing is cached globally or ordered. Contexts are created per test and closed at the end. The fixture also deletes the customer afterwards, so no account accumulates, and the server session dies with the account.
+
+### Q5 — How do you combine API and UI testing?
+
+Through fixtures and the business flow: the API creates and later deletes the customer, the UI validates the customer can actually use the application, and the API verifies the backend record (e.g., storageState test: UI proves the session is authenticated; `getUserDetailByEmail` proves the backend record matches). The order flow adds a third cross-layer point: the checkout delivery address rendered by the UI must equal the API-created account data.
+
+### Q6 — How would you test invalid login scenarios?
+
+First verify the real behavior — never assume. Here the form has HTML5 validation, so empty fields and malformed email formats are blocked client-side (asserted via `:invalid` and the absence of a server response); unknown email or wrong password are rejected by the server with its actual message. Each negative test also asserts the user never reaches an authenticated state. Notably, the API layer does no format validation at all — that asymmetry is a genuine finding, and I cover the boundary where it exists (the UI).
+
+### Q7 — Why not perform UI login before every test?
+
+It's slow (three browsers × repeated multi-second login flows), it makes auth failures look like product failures, and it couples every test to the login form's selectors. With the storageState fixture, only the fixture touches the login form; tests consume an authenticated context.
+
+### Q8 — When would you avoid reusing authentication state?
+
+When the test *is* about authentication (login/logout tests must do the real login), when state must be fresh or isolated (permissions, roles), when the session is mutable server-side (here: logout invalidates the state server-side, so a saved state is not a permanent credential), or when a global setup would create test-order dependencies. I keep the state per-test for exactly that reason — the speed benefit without shared mutable state.
+
+### Q9 — How do you clean up test data?
+
+Create → test → delete in the same run. Fixtures delete their API-created customer after each test and log loudly on failure; lifecycle tests delete in `finally` blocks; UI-signup tests clean up through the API (deterministic in all browsers). The one thing this site cannot clean is orders (no orders API) — documented honestly rather than hidden.
+
+### Q10 — How do you keep authentication tests stable across Chromium, Firefox and WebKit?
+
+I assert on behavior and stable selectors, not cosmetics: the site's `data-qa` attributes, the logged-in header indicator, and header links whose visibility encodes auth state. The HTML5-validation tests assert the standard `:invalid` pseudo-class, which all three engines support. And this site has known WebKit quirks (plain link clicks not navigating) — where that applied (Phase 1/2) I navigated by URL instead; the Phase 3 flows were verified in WebKit directly, including the cart modal and checkout navigation.

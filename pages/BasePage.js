@@ -7,6 +7,12 @@
 class BasePage {
   constructor(page) {
     this.page = page;
+
+    // Header controls whose visibility encodes the auth state:
+    // logout link only exists while a customer is logged in,
+    // the "Signup / Login" link only while logged out.
+    this.logoutLink = page.locator('a[href="/logout"]');
+    this.signupLoginLink = page.locator('a[href="/login"]');
   }
 
   // All navigations use domcontentloaded - the site pulls heavy ad

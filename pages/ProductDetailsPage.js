@@ -21,10 +21,33 @@ class ProductDetailsPage extends BasePage {
     this.price = this.informationBlock.locator('span span');
 
     this.availability = this.informationBlock.getByText('Availability');
+
+    // Quantity input next to the Add to cart button.
+    this.quantityInput = page.locator('#quantity');
+
+    // Add to cart button inside the information block.
+    this.addToCartButton = this.informationBlock.locator('button.cart');
+
+    // "View Cart" link inside the confirmation modal shown after
+    // adding an item to the cart.
+    this.viewCartModalLink = page.locator('.modal-content a[href="/view_cart"]');
   }
 
   async open(productId) {
     await super.goto(`/product_details/${productId}`);
+  }
+
+  // Adds the current product (with optional quantity) to the cart.
+  async addToCart(quantity) {
+    if (quantity) {
+      await this.quantityInput.fill(String(quantity));
+    }
+    await this.addToCartButton.click();
+  }
+
+  // Continues from the "Added!" modal to the cart page.
+  async viewCartFromModal() {
+    await this.viewCartModalLink.click();
   }
 }
 
