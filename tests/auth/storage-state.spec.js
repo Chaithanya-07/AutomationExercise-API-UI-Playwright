@@ -18,22 +18,27 @@ test('a new context created from saved storageState starts authenticated', async
   authState,
 }) => {
   // Fresh context built from the captured state - no login performed.
+  // Created manually, so it is closed manually in a finally block -
+  // always released, including when an assertion below fails.
   const context = await browser.newContext({ storageState: authState.state });
-  const home = new HomePage(await context.newPage());
-  await home.open();
 
-  // Meaningful authenticated state, not just a successful navigation:
-  // the logged-in indicator and the logout control are both visible.
-  await expect(home.loggedInAs(authState.user.name)).toBeVisible();
-  await expect(home.logoutLink).toBeVisible();
+  try {
+    const home = new HomePage(await context.newPage());
+    await home.open();
 
-  // Cross-layer: the backend record for this session's customer
-  // still matches the generated test data.
-  const detail = await usersApi.getUserDetailByEmail(request, authState.user.email);
-  expect(detail.body.responseCode).toBe(200);
-  expect(detail.body.user.name).toBe(authState.user.name);
+    // Meaningful authenticated state, not just a successful navigation:
+    // the logged-in indicator and the logout control are both visible.
+    await expect(home.loggedInAs(authState.user.name)).toBeVisible();
+    await expect(home.logoutLink).toBeVisible();
 
-  await context.close();
+    // Cross-layer: the backend record for this session's customer
+    // still matches the generated test data.
+    const detail = await usersApi.getUserDetailByEmail(request, authState.user.email);
+    expect(detail.body.responseCode).toBe(200);
+    expect(detail.body.user.name).toBe(authState.user.name);
+  } finally {
+    await context.close();
+  }
 });
 
 test('logging out invalidates the saved session state server-side', async ({
@@ -42,17 +47,27 @@ test('logging out invalidates the saved session state server-side', async ({
 }) => {
   // First context from the state logs out - verified live: the
   // sessionid cookie is invalidated on the server, not just locally.
+  // Each context is created manually and closed in its own finally
+  // block, so neither leaks when an assertion or navigation fails.
   const ctx1 = await browser.newContext({ storageState: authState.state });
-  const p1 = new HomePage(await ctx1.newPage());
-  await p1.open();
-  await p1.logout();
-  await ctx1.close();
+
+  try {
+    const p1 = new HomePage(await ctx1.newPage());
+    await p1.open();
+    await p1.logout();
+  } finally {
+    await ctx1.close();
+  }
 
   // A second context from the SAME saved state is a guest again.
   const ctx2 = await browser.newContext({ storageState: authState.state });
-  const p2 = new HomePage(await ctx2.newPage());
-  await p2.open();
-  await expect(p2.loggedInAs(authState.user.name)).toHaveCount(0);
-  await expect(p2.signupLoginLink).toBeVisible();
-  await ctx2.close();
+
+  try {
+    const p2 = new HomePage(await ctx2.newPage());
+    await p2.open();
+    await expect(p2.loggedInAs(authState.user.name)).toHaveCount(0);
+    await expect(p2.signupLoginLink).toBeVisible();
+  } finally {
+    await ctx2.close();
+  }
 });

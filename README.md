@@ -6,6 +6,15 @@ Full-stack test automation for **[automationexercise.com](https://automationexer
 > **Phase 2** — API chaining, update coverage, negative/boundary tests, lightweight response validation, stronger hybrid consistency. See [Phase 2](#phase-2--api-chaining-update--negative-coverage--consistency) below.
 > **Phase 3** — authentication, session state (storageState), and an authenticated end-to-end order flow. See [Phase 3](#phase-3--authentication-session-state--end-to-end-order-flow) below.
 
+## Current Project Status
+
+- **Project 1 — QADemo** — COMPLETE / FROZEN
+- **Project 2 — Automation Exercise**
+  - **Phase 1** — COMPLETE / APPROVED — 54/54
+  - **Phase 2** — COMPLETE / APPROVED — 87/87
+  - **Phase 3** — IMPLEMENTED / FINAL MENTOR REVIEW — 108 scheduled runs, 0 failed, 1 flaky
+  - **Phase 4** — NOT STARTED
+
 ## Project Objective
 
 The core interview story of this project:
@@ -142,9 +151,12 @@ Every endpoint was verified against the **live** system before being used (safe 
 
 ## Cleanup
 
-Every API- or UI-created customer is deleted in the same test run:
+Every API- or UI-created customer is deleted in the same test run. The cleanup policy (final Phase 3 state):
 
-- the `createdUser` fixture deletes its customer after each test and **fails loudly** (logged error) if deletion fails
+- **both customer fixtures use `try/finally`** — `createdUser` (`fixtures/api.fixture.js`) and `authState` (`fixtures/auth.fixture.js`) wrap setup and teardown, so **cleanup is attempted even when setup fails** after the account may have been created. No API-created customer is orphaned by a broken setup.
+- the `createdUser` fixture deletes its customer after each test; a `404` on delete is accepted only when the account was never created (nothing to clean up).
+- **cleanup failure fails the test when there is no prior test failure** — a customer that survives cleanup is never a silently passing test.
+- **when the test has already failed, the cleanup failure is logged loudly without masking the original error.**
 - `tests/api/users.api.spec.js` verifies deletion inside the test (delete → 404 on lookup)
 - the UI signup test registers through the browser, then deletes its account through the **API** (deterministic in every browser — the header "Delete Account" link click proved unreliable in WebKit) and verifies the 404 lookup
 
@@ -341,11 +353,16 @@ The checkout step is the cross-layer proof that the session belongs to *our* cus
 
 ## Cleanup
 
-- `authState` fixture: deletes its API-created customer after every test and logs an error loudly if deletion fails.
+- `authState` fixture: setup and teardown are wrapped in try/finally — if the UI login or the storageState capture fails **before** the test body runs, the login context is still closed and the API-created customer is still deleted. No customer survives a broken setup, and no browser context leaks.
+- `createdUser` fixture (`fixtures/api.fixture.js`): the generated email/password are held locally **before** the create request, so cleanup is attempted even when `createAccount` throws **after** the server may have committed the account (timeout, lost response, unparseable body) — that account would otherwise be orphaned with no teardown path. A `404` on delete is accepted only when the account was never confirmed as created (nothing to clean up).
+- A failed customer deletion is an **explicit test failure** in both customer fixtures (never a silently passing test). When the test itself already failed, the cleanup failure is logged loudly without masking the original error.
+- `tests/auth/order-flow.spec.js` closes its manually created authenticated context in a `finally` block, so the context is released on success and on failure alike.
 - Test isolation: each test owns its customer and its state; nothing is shared between tests.
 - Known limitation: **orders cannot be deleted** — the site has no orders API. Placing the order empties the cart, and the account deletion removes the customer, but the order record remains on the practice site (documented, not hidden).
 
-## Phase 3 Actual Results (2026-10-03, Playwright 1.63.0, Node v24.13.0)
+## Phase 3 Actual Results
+
+### Original Phase 3 baseline (2026-10-03, Playwright 1.63.0, Node v24.13.0)
 
 | Suite | Scenarios | Runs (× 3 browsers) | Passed | Failed |
 |---|---|---|---|---|
@@ -356,13 +373,33 @@ The checkout step is the cross-layer proof that the session belongs to *our* cus
 | **Total** | **36** | **108** | **108** | **0** |
 
 - Browsers: Chromium, Firefox, WebKit — all passing (including the order flow and the WebKit modal/cart navigation)
-- Full-suite regression run after Phase 3: **108 passed, 0 failed, 0 flaky** (~3.6 minutes) — all Phase 1 and Phase 2 tests unchanged and still green
+- Full-suite regression run after Phase 3: **108 passed, 0 failed** (~3.6 minutes), run with `retries: 0` — all Phase 1 and Phase 2 tests unchanged and still green
+
+### Final state after the cleanup-hardening pass (2026-10-06)
+
+Both customer fixtures (`authState` and `createdUser`) now guarantee teardown through try/finally, so no API-created customer can be orphaned by a broken setup. Final full-suite run, all suites × Chromium/Firefox/WebKit:
+
+| Suite | Scenarios | Runs (× 3 browsers) | Passed | Flaky | Failed |
+|---|---|---|---|---|---|
+| UI (`tests/ui`) | 7 | 21 | 21 | 0 | 0 |
+| API (`tests/api`) | 20 | 60 | 60 | 0 | 0 |
+| Hybrid (`tests/hybrid`) | 2 | 6 | 6 | 0 | 0 |
+| Auth (`tests/auth`) | 7 | 21 | 20 | 1 | 0 |
+| **Total** | **36** | **108** | **107** | **1** | **0** |
+
+- **108 scheduled test runs completed successfully with 0 failures; 107 passed on the first attempt and 1 was flaky/passed on retry.**
+- Exact breakdown: **108 scheduled runs** · **107 passed on first attempt** · **1 flaky** · **0 failed** · **108 ultimately successful after retry**.
+- Duration ~3.5 minutes.
+- The retried run was `tests/auth/storage-state.spec.js` › "logging out invalidates the saved session state server-side" (Firefox).
+- Same-day runs with `retries: 0` (honest first-run reporting) surfaced one Chromium flake each, on **different** tests — see the live-site instability note below. Both passed on immediate re-run, and neither involves the cleanup code or the modified fixtures: this is environment instability, not a framework regression.
+- Browsers: Chromium, Firefox, WebKit — no failures on any engine; Phase 1 and Phase 2 tests remain unchanged and green.
 
 ## Phase 3 Limitations
 
 - **No orders API exists**, so an order cannot be verified or deleted through the API. The invoice id is asserted as dynamically assigned (`/download_invoice/<id>`), and the checkout's delivery address block is the cross-layer validation point instead.
 - The authenticated state must be captured via UI login (no API login-token endpoint); the storageState is therefore per-customer, not a pre-seeded reusable login.
 - Login format validation is HTML5 client-side only — the API accepts malformed emails (Phase 2 finding); the negative tests cover the UI boundary where it actually exists.
+- **Live-site instability (observed 2026-10-06)**: the site intermittently injects a full-viewport Google Ads overlay on `/checkout` (`ins.adsbygoogle` occupying `100vw × 100vh`), which can intercept the "Place Order" click on Chromium so the flow never reaches `/payment`; a separate run flaked on a `toHaveTitle` timing check in `tests/ui/home.spec.js`. Both passed on immediate re-run and on retry. This is third-party/environment noise on the practice site — documented rather than hidden or masked with retries.
 
 ## Interview Talking Points
 
@@ -400,7 +437,7 @@ When the test *is* about authentication (login/logout tests must do the real log
 
 ### Q9 — How do you clean up test data?
 
-Create → test → delete in the same run. Fixtures delete their API-created customer after each test and log loudly on failure; lifecycle tests delete in `finally` blocks; UI-signup tests clean up through the API (deterministic in all browsers). The one thing this site cannot clean is orders (no orders API) — documented honestly rather than hidden.
+Create → test → delete in the same run. Fixtures guarantee cleanup through try/finally; cleanup failures fail the test when there is no prior failure and are logged without masking an existing failure. Lifecycle tests also delete in finally blocks, while UI-signup tests clean up through the API. The one thing this site cannot clean is orders because there is no orders API — that limitation is documented honestly.
 
 ### Q10 — How do you keep authentication tests stable across Chromium, Firefox and WebKit?
 
