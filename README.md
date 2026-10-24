@@ -5,6 +5,7 @@ Full-stack test automation for **[automationexercise.com](https://automationexer
 > **Phase 1** — foundation (POM, API service layer, fixtures, dynamic data, first hybrid flow). See [Phase 1 report](#actual-results) below.
 > **Phase 2** — API chaining, update coverage, negative/boundary tests, lightweight response validation, stronger hybrid consistency. See [Phase 2](#phase-2--api-chaining-update--negative-coverage--consistency) below.
 > **Phase 3** — authentication, session state (storageState), and an authenticated end-to-end order flow. See [Phase 3](#phase-3--authentication-session-state--end-to-end-order-flow) below.
+> **Phase 4** — GitHub Actions CI/CD: the full suite runs automatically on every push to `master`. See [Phase 4](#phase-4--github-actions-cicd) below.
 
 ## Current Project Status
 
@@ -13,7 +14,8 @@ Full-stack test automation for **[automationexercise.com](https://automationexer
   - **Phase 1** — COMPLETE / APPROVED — 54/54
   - **Phase 2** — COMPLETE / APPROVED — 87/87
   - **Phase 3** — IMPLEMENTED / FINAL MENTOR REVIEW — 108 scheduled runs, 0 failed, 1 flaky
-  - **Phase 4** — NOT STARTED
+  - **Phase 4** — IMPLEMENTED / EXECUTED SUCCESSFULLY — GitHub Actions CI, 108/108 passed
+  - **Phase 5** — NOT STARTED
 
 ## Project Objective
 
@@ -77,6 +79,9 @@ AutomationExercise-API-UI-Playwright/
 │   └── testData.js                # unique customer generator
 ├── test-data/
 │   └── users.example.json         # shape of the generated customer
+├── .github/
+│   └── workflows/
+│       └── playwright.yml            # Phase 4: GitHub Actions CI workflow
 ├── playwright.config.js
 └── package.json
 ```
@@ -191,7 +196,7 @@ Full suite run on **2026-10-03** — Playwright 1.63.0, Node v24.13.0, Windows 1
 
 ## Known Limitations
 
-- **Phase 1 scope only** — no schema-validation framework, network interception, mocking, advanced API chaining, CI/CD or Docker yet (planned for later Project 2 phases).
+- **Original Phase 1 scope** — schema-validation framework, network interception, mocking, advanced API chaining, CI/CD, and Docker were outside the initial Phase 1 scope. These capabilities were introduced or planned for subsequent phases as documented below.
 - **UI signup form selectors could not be pre-verified with plain HTTP** — the site returns 403 for non-browser form POSTs (anti-bot). They were verified live through Playwright browser runs instead.
 - **WebKit does not navigate on the products page's "View Product" link click** (Chromium and Firefox do). The details test therefore reads the product id from the link and opens `/product_details/{id}` directly — deterministic in all browsers.
 - **Product count assertion is `> 0`**, not an exact count, because the live catalog can change.
@@ -442,3 +447,137 @@ Create → test → delete in the same run. Fixtures guarantee cleanup through t
 ### Q10 — How do you keep authentication tests stable across Chromium, Firefox and WebKit?
 
 I assert on behavior and stable selectors, not cosmetics: the site's `data-qa` attributes, the logged-in header indicator, and header links whose visibility encodes auth state. The HTML5-validation tests assert the standard `:invalid` pseudo-class, which all three engines support. And this site has known WebKit quirks (plain link clicks not navigating) — where that applied (Phase 1/2) I navigated by URL instead; the Phase 3 flows were verified in WebKit directly, including the cart modal and checkout navigation.
+
+---
+
+# Phase 4 — GitHub Actions CI/CD
+
+## Objective
+
+Take the framework out of "runs only on my machine": add a GitHub Actions workflow that installs the project, runs the full Playwright suite, and publishes the results as downloadable artifacts **automatically on every push to `master`** — without changing any test code, configuration, or the frozen Phase 1–3 baselines.
+
+## CI/CD Concepts (explained through this workflow)
+
+- **What a GitHub Actions workflow is** — a YAML file in `.github/workflows/` describing an automation recipe GitHub's servers execute. This project's recipe is `.github/workflows/playwright.yml` and its name is `Playwright Tests`. GitHub picks the file up automatically because of its location; nothing in the repository had to be registered by hand.
+- **Trigger** — the event that starts the workflow. Here it is `on: push → branches: [master]`, so every push to `master` (a new commit, or a merged change) kicks off one workflow run. Pushes to other branches do not run it.
+- **Job** — a named group of steps that runs on one machine as a unit. This workflow defines the single job `test` (display name `Run Playwright Tests`).
+- **Runner** — the virtual machine a job runs on. This workflow uses `ubuntu-latest`, a fresh Linux VM GitHub provisions per run. That is why browser installation is part of the workflow: the runner starts with nothing installed.
+- **Steps** — the individual commands and actions inside the job, executed in order on the runner. Checkout → Node.js → dependencies → browsers → tests → artifact upload (detailed in the table below).
+
+## The Workflow — `.github/workflows/playwright.yml`
+
+| Step | What it does | Why it matters in CI/CD |
+|---|---|---|
+| `actions/checkout@v4` | Pulls this repository's code onto the runner. | Without it, the runner has no tests to run. |
+| `actions/setup-node@v4` (Node.js 24) | Installs Node.js 24 on the runner, matching the local environment. | A runner is a blank machine; the Node version must match the one the framework was built and tested with. |
+| `setup-node` with `cache: npm` | Caches npm dependencies between runs. | Uses the npm cache to reduce repeated package downloads and speed up dependency installation. |
+| `npm ci` | Installs exactly the dependency versions from `package-lock.json`. | Reproducible installs — see below. |
+| `npx playwright install --with-deps` | Downloads the Playwright browsers **and** the OS libraries they need on the runner. | Ubuntu runners don't ship the browsers or their system libraries (fonts, media codecs, X libraries); `--with-deps` installs both in one step. |
+| `npx playwright test` | Runs the full suite — all three configured browser projects (Chromium, Firefox, WebKit). This is the job's real purpose. | Automated tests after every push mean a regression is caught in minutes, not at the next manual run. |
+| `actions/upload-artifact@v4` | Uploads `playwright-report/` and `test-results/` as the artifact `playwright-test-artifacts`, so results survive after the runner is deleted. | The runner VM is discarded after the job; artifacts are the only way to inspect what actually happened. |
+
+Additional artifact settings:
+
+- **`if: ${{ !cancelled() }}`** — the upload step runs even when the tests fail (or are cancelled at a later stage). Without this condition, a failing run uploads nothing — exactly when you need the report the most.
+- **`if-no-files-found: ignore`** — the job does not fail just because an optional folder (e.g. `test-results/`) is missing; on a fully green run it can be empty.
+- **`retention-days: 14`** — the artifact is stored for 14 days and then cleaned up automatically, so old reports don't accumulate against the repository's storage quota.
+
+### Why `npm ci` and not `npm install` in CI
+
+`npm ci` installs the **exact** versions locked in `package-lock.json` and fails if the lockfile and `package.json` disagree. That makes every CI run reproducible — the same dependency tree as every other run — and catches lockfile drift immediately. `npm install` could silently resolve newer versions on each run, so a CI failure could be caused by a dependency update nobody made consciously.
+
+### How tests run after a push
+
+1. Code is pushed to `master`.
+2. GitHub reads the workflow file, sees the push trigger, and queues a run.
+3. It provisions a fresh `ubuntu-latest` runner for the `test` job.
+4. The steps run in order: checkout → Node 24 → cached install → browsers → the full Playwright suite.
+5. The job passes or fails based on the test exit code, and the report artifact is uploaded.
+6. The runner is destroyed; only the workflow run log and the artifacts remain.
+
+## Playwright Configuration in CI (`playwright.config.js`)
+
+The workflow runs `npx playwright test` with no extra arguments, so the existing `playwright.config.js` governs the CI run exactly as it governs local runs:
+
+- **Configured browser projects:** `chromium` (`Desktop Chrome`), `firefox` (`Desktop Firefox`), `webkit` (`Desktop Safari`) — the full suite is *configured* to run on all three engines in one CI execution.
+  **Important:** the verified CI results below are the suite totals from the HTML report. Per-browser test counts were **not** verified from the CI logs, so no per-browser totals are claimed here — "three configured projects" and "verified per-browser CI passes" are deliberately kept apart.
+- **Reporters:** `list` (console output in the run log) and `html` (writes `playwright-report/` inside the runner — the folder the artifact step uploads).
+- **Trace and screenshot behavior:** `trace: 'retain-on-failure'` and `screenshot: 'only-on-failure'` — failure diagnostics are produced **only when something fails**. A fully green run produces no traces or screenshots at all (relevant to the artifact contents below).
+- Everything else (timeouts, `retries: 0`, `workers: 2`, `baseURL`) is unchanged — CI runs the same test behavior as local runs, not a special CI-only variant.
+
+## GitHub Actions Run — Results From the HTML Report
+
+The HTML report downloaded from the GitHub Actions artifact (`playwright-test-artifacts`) visibly confirms the following for the run of commit **`CI: add Playwright GitHub Actions workflow`**:
+
+| Metric | Value (as shown in the CI HTML report) |
+|---|---|
+| Total tests | 108 |
+| Passed | 108 |
+| Failed | 0 |
+| Flaky | 0 |
+| Skipped | 0 |
+| Total execution time | 3.0 minutes |
+| Report date displayed | October 20, 2026 |
+
+- These are **CI results as displayed in the GitHub Actions HTML report** — they are separate from, and not the same run as, the local full-suite results recorded in the Phase 1–3 sections above.
+- The CI totals (108 tests, 3.0 minutes) match the Phase 3 final baseline (36 scenarios × 3 browsers = 108 runs), which is consistent evidence that the CI run covered the full suite.
+
+## Artifacts and Failure Debugging
+
+**How to retrieve and open the CI report:**
+
+1. Open the repository on GitHub → the **Actions** tab → select the workflow run (`Playwright Tests`, commit message shown).
+2. Scroll to the **Artifacts** section of the run page and download **`playwright-test-artifacts`** (a ZIP file).
+3. Extract the ZIP locally.
+4. Open **`playwright-report/index.html`** in a browser (it is self-contained — no server needed).
+5. Use the report to see each test's outcome: passed/failed/flaky/skipped, per-test duration, and the error message for any failure.
+
+**What the artifact contained in this run:** the extracted ZIP contained the **HTML report**. A separate `test-results/` directory was **not** visible in the downloaded ZIP — consistent with the config, because `test-results/` holds failure diagnostics (traces, screenshots) and this was a fully passing run: none were generated. Nothing about failure screenshots or traces is claimed for this run.
+
+**When failures happen, these files are what makes debugging tractable:**
+
+- `playwright-report/index.html` — always produced; shows what failed and why (error, location, retry status).
+- `test-results/` — populated on failure: contains the failure screenshots (from `screenshot: 'only-on-failure'`) and Playwright traces (from `trace: 'retain-on-failure'`). A trace can be opened with `npx playwright show-trace trace.zip` to step through every action, network request, DOM snapshot and console message of the failed test.
+- This is the concrete payoff of the `!cancelled()` upload condition: the diagnostics exist and the folder was still uploaded precisely **when the run failed**.
+
+## Environment Variables and Secrets
+
+The current Phase 4 workflow uses **no environment variables and no GitHub repository secrets**, and none are needed for this suite — tests generate their own unique customer data, and no real or hard-coded credentials exist anywhere in the framework (a Phase 1 design decision that pays off directly in CI: nothing secret had to be provisioned before the workflow could run).
+
+For **future** CI workflows (not part of the current implementation), the relevant considerations would be:
+
+- Any credential the tests genuinely needed would go into **GitHub Actions secrets** (repository Settings → Secrets and variables → Actions) and be exposed to the workflow as `${{ secrets.NAME }}` — never committed to the repository or hardcoded in the workflow YAML.
+- Environment-specific values (base URLs, timeouts) could be passed as `env:` entries in the workflow or read from `process.env` in the config.
+- Secrets printed into test logs or failure traces must be handled carefully (artifact retention of 14 days applies to any report containing them).
+
+These are noted as future improvements; no secrets have been configured or used in this workflow.
+
+## Useful Commands
+
+Local verification, matching what the CI workflow does:
+
+```bash
+npm ci                        # clean install of the exact locked dependency versions
+npx playwright install        # download the Playwright browsers locally (like install --with-deps on CI, minus OS packages)
+npx playwright test           # run the full suite — all 3 browsers, both reporters
+npm run report                # open the local HTML report
+```
+
+Git commands used to inspect changes safely (what each verifies):
+
+```bash
+git status --short            # shows exactly which files were modified — confirms nothing unexpected changed
+git diff --check              # flags whitespace errors (trailing spaces, conflict markers) in the diff
+git diff -- README.md         # shows the full README diff for review — confirms Phase 1–3 content is untouched
+```
+
+## Phase 4 Summary
+
+- **Implemented:** `.github/workflows/playwright.yml` — a `Playwright Tests` workflow triggered on push to `master`, running in one job on `ubuntu-latest`: checkout v4 → Node.js 24 (`setup-node` v4 with npm caching) → `npm ci` → `npx playwright install --with-deps` → `npx playwright test` → artifact upload (`playwright-test-artifacts`: `playwright-report/` + `test-results/`, `if-no-files-found: ignore`, retained 14 days, uploaded on `${{ !cancelled() }}`).
+- **How it runs:** every push to `master` provisions a fresh Ubuntu runner, installs deterministic dependencies, installs the three Playwright browsers with their OS dependencies, runs the whole suite (all three configured browser projects), and publishes the report as a downloadable artifact — with no manual steps.
+- **Verified result:** the GitHub Actions run of commit `CI: add Playwright GitHub Actions workflow` completed with **108/108 tests passed, 0 failed, 0 flaky, 0 skipped** in **3.0 minutes** (as shown in the downloaded CI HTML report, dated October 20, 2026) — the frozen Phase 1–3 baseline held on the CI runner.
+- **Artifact/report availability:** the artifact ZIP contains the self-contained HTML report (`playwright-report/index.html`); failure diagnostics in `test-results/` appear only on failing runs (none were generated here).
+- **Limitations / not yet verified:** per-browser CI test counts were not verified from the CI logs; a separate `test-results/` folder was not present in this artifact (expected for a green run); no CI run URL or commit SHA is recorded here deliberately — none were verified. Docker, additional triggers (e.g. PRs, schedules), secret-based configuration, and CI failure handling with real traces are candidates for later phases.
+- **Learning outcomes:** how a workflow's trigger/job/runner/steps map to an actual automation pipeline; why `npm ci` gives reproducible CI installs while `npm install` does not; why CI runners need browser + OS-dependency installation that local setups don't; why artifacts must be uploaded on `!cancelled()` (or failures would arrive with no report); and how the HTML report plus traces/screenshots turn a red CI run into a debuggable one.
+
+**Phase 4 status: implemented and successfully executed.** Phase 5 has not been started.
