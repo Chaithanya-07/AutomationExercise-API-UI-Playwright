@@ -6,6 +6,7 @@ Full-stack test automation for **[automationexercise.com](https://automationexer
 > **Phase 2** — API chaining, update coverage, negative/boundary tests, lightweight response validation, stronger hybrid consistency. See [Phase 2](#phase-2--api-chaining-update--negative-coverage--consistency) below.
 > **Phase 3** — authentication, session state (storageState), and an authenticated end-to-end order flow. See [Phase 3](#phase-3--authentication-session-state--end-to-end-order-flow) below.
 > **Phase 4** — GitHub Actions CI/CD: the full suite runs automatically on every push to `master`. See [Phase 4](#phase-4--github-actions-cicd) below.
+> **Phase 5** — pull-request CI trigger and a `test:auth` npm script. See [Phase 5](#phase-5--pull-request-trigger-and-test-auth-script) below.
 
 ## Current Project Status
 
@@ -15,7 +16,7 @@ Full-stack test automation for **[automationexercise.com](https://automationexer
   - **Phase 2** — COMPLETE / APPROVED — 87/87
   - **Phase 3** — IMPLEMENTED / FINAL MENTOR REVIEW — 108 scheduled runs, 0 failed, 1 flaky
   - **Phase 4** — IMPLEMENTED / EXECUTED SUCCESSFULLY — GitHub Actions CI, 108/108 passed
-  - **Phase 5** — NOT STARTED
+  - **Phase 5** — IN PROGRESS / PENDING MENTOR REVIEW — PR trigger and `test:auth` script added; earlier full run: 107 passed, 1 failed (intermittent Chromium order-flow timeout); latest full run: 108/108 passed in 6.3 minutes; PR trigger implemented locally, not yet verified on an actual GitHub pull request (see [Phase 5](#phase-5--pull-request-trigger-and-test-auth-script))
 
 ## Project Objective
 
@@ -175,6 +176,7 @@ npx playwright test tests/ui       # UI only
 npx playwright test tests/api       # API only
 npx playwright test tests/hybrid    # hybrid only
 npx playwright test tests/auth     # authentication + session state (Phase 3)
+npm run test:auth                   # authentication tests via the dedicated Phase 5 npm script
 npx playwright test                 # everything, all 3 browsers
 npm run report                      # open the HTML report
 ```
@@ -577,7 +579,47 @@ git diff -- README.md         # shows the full README diff for review — confir
 - **How it runs:** every push to `master` provisions a fresh Ubuntu runner, installs deterministic dependencies, installs the three Playwright browsers with their OS dependencies, runs the whole suite (all three configured browser projects), and publishes the report as a downloadable artifact — with no manual steps.
 - **Verified result:** the GitHub Actions run of commit `CI: add Playwright GitHub Actions workflow` completed with **108/108 tests passed, 0 failed, 0 flaky, 0 skipped** in **3.0 minutes** (as shown in the downloaded CI HTML report, dated October 20, 2026) — the frozen Phase 1–3 baseline held on the CI runner.
 - **Artifact/report availability:** the artifact ZIP contains the self-contained HTML report (`playwright-report/index.html`); failure diagnostics in `test-results/` appear only on failing runs (none were generated here).
-- **Limitations / not yet verified:** per-browser CI test counts were not verified from the CI logs; a separate `test-results/` folder was not present in this artifact (expected for a green run); no CI run URL or commit SHA is recorded here deliberately — none were verified. Docker, additional triggers (e.g. PRs, schedules), secret-based configuration, and CI failure handling with real traces are candidates for later phases.
+- **Limitations / not yet verified:** per-browser CI test counts were not verified from the CI logs; a separate `test-results/` folder was not present in this artifact (expected for a green run); no CI run URL or commit SHA is recorded here deliberately — none were verified. Docker, additional triggers (e.g. schedules), secret-based configuration, and CI failure handling with real traces are candidates for later phases.
+- Original Phase 4 scope — pull-request validation was not included in the initial Phase 4 implementation. It is being introduced in Phase 5; successful execution on an actual pull request remains to be verified.
 - **Learning outcomes:** how a workflow's trigger/job/runner/steps map to an actual automation pipeline; why `npm ci` gives reproducible CI installs while `npm install` does not; why CI runners need browser + OS-dependency installation that local setups don't; why artifacts must be uploaded on `!cancelled()` (or failures would arrive with no report); and how the HTML report plus traces/screenshots turn a red CI run into a debuggable one.
 
-**Phase 4 status: implemented and successfully executed.** Phase 5 has not been started.
+**Phase 4 status: implemented and successfully executed.**
+
+---
+
+# Phase 5 — Pull-Request Trigger and `test:auth` Script
+
+## Scope (approved, unchanged)
+
+1. `.github/workflows/playwright.yml`: added a `pull_request` trigger targeting `master`; the existing `push` trigger on `master` is preserved.
+2. `package.json`: added `"test:auth": "playwright test tests/auth"`, alongside the existing `test:ui`, `test:api` and `test:hybrid` scripts.
+3. This README section, written after validation.
+
+Not touched: `playwright.config.js`, `package-lock.json`, tests, fixtures, page objects, API services. Docker remains deferred.
+
+## Validation Results (2026-10-26, Playwright 1.63.0, Node v24, `retries: 0`)
+
+| Command | Result |
+|---|---|
+| `git diff --check` | no whitespace errors (Git prints an LF→CRLF notice for `package.json`; informational only) |
+| `npm run test:auth` | 20 passed, 1 failed |
+| `npx playwright test` (earlier full run, run once to completion) | **107 passed, 1 failed**, 108 scheduled runs, 3.3 minutes |
+| `npx playwright test` (latest full run) | **108 passed, 0 failed**, 6.3 minutes |
+
+The only failure in the earlier runs was the same test: `[chromium] tests/auth/order-flow.spec.js` › "an authenticated customer can order a product end to end". Firefox and WebKit passed it in both of those runs. The earlier results are kept as recorded; no test or configuration change was made between that run and the latest one.
+
+**Latest local regression run:** 108 tests passed, 0 failed in 6.3 minutes. The result was verified from the terminal output shared on October 31, 2026. An earlier run had one intermittent Chromium order-flow failure involving a Google Ads interstitial; the issue has not been conclusively resolved.
+
+## Failure Analysis of the Earlier Run (from the existing trace and screenshots)
+
+- **Symptom:** `locator.fill` timed out after 15 s waiting for `[data-qa="name-on-card"]` (`PaymentPage.payWithTestCard`) — the payment form never appeared.
+- **Trace:** login, product details, add-to-cart, cart and checkout steps all succeeded. The page then loaded `/checkout#google_vignette` — a Google Ads vignette interstitial — and the "Place Order" click (`a[href="/payment"]`) executed on it. A `GET /payment` returned 200, but the last page snapshot for the test still shows `/checkout#google_vignette` through the timeout. The failure screenshot shows a full-screen third-party ad dialog ("Close") over the page.
+- **Conclusion:** consistent with the already-documented Phase 3 live-site instability (see Phase 3 Limitations): a third-party ad overlay on `/checkout` interferes with the flow on Chromium. No cleanup problem was involved — the failing test belongs to the `authState` fixture, which still deletes its customer.
+- **Not established:** *why* the `/payment` navigation did not render despite the 200 response, and why only Chromium was affected. Those depend on third-party ad behaviour that is outside this repository and that I could not reproduce deterministically.
+
+## Unresolved Limitations
+
+- **The Chromium order-flow flake is unresolved.** It did not recur in the latest full run (108/108), but it is intermittent and not permanently fixed. No test, page-object or config change was made to hide it. Possible follow-ups (all need separate approval): dismiss or block the ad overlay in the page object, enable retries in CI, or block ad-network requests in the test context.
+- **The new `pull_request` trigger is implemented locally but has not been verified by an actual GitHub pull-request run.** Pull-request runs can hit the same live-site flake, because CI uses `retries: 0`. A red PR check may therefore be caused by ad interference rather than a regression.
+- **No Phase 5 CI run result is recorded** — no run URL or commit SHA was verified, and the changes are uncommitted.
+- Limitations from Phases 1–4 (no orders API so orders cannot be deleted, live-site dependency, Docker deferred) are unchanged.

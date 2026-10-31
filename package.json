@@ -7,6 +7,7 @@
     "test:ui": "playwright test tests/ui",
     "test:api": "playwright test tests/api",
     "test:hybrid": "playwright test tests/hybrid",
+    "test:auth": "playwright test tests/auth",
     "report": "playwright show-report"
   },
   "devDependencies": {
